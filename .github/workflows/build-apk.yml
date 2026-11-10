@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar proyecto
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
       - name: Configurar Java 17
@@ -26,32 +26,63 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Comprobar archivos del proyecto
+      - name: Extraer proyecto Android
+        id: extract
         shell: bash
         run: |
           set -e
-          echo "Contenido de la raíz del repositorio:"
-          ls -la
 
-          for f in settings.gradle build.gradle gradle.properties app/build.gradle app/src/main/AndroidManifest.xml app/src/main/assets/index.html app/src/main/java/com/matibatidos/pos/MainActivity.java; do
-            if [ ! -f "$f" ]; then
-              echo "ERROR: falta $f"
-              exit 1
-            fi
-          done
+          ZIP="Matibatidos_RC6_APK_LISTO_PARA_GITHUB.zip"
 
-          echo "Estructura Android correcta."
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: No se encuentra $ZIP en la raíz."
+            ls -la
+            exit 1
+          fi
+
+          mkdir -p android_project
+          unzip -q "$ZIP" -d android_project
+
+          echo "Contenido extraído:"
+          find android_project -maxdepth 3 -type f | head -80
+
+          SETTINGS=$(find android_project \
+            -type f -name settings.gradle \
+            -not -path '*/.git/*' \
+            -print -quit)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: El ZIP no contiene settings.gradle."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          echo "Proyecto localizado en: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar archivos Android
+        working-directory: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          set -e
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/assets/index.html
+
+          echo "Estructura Android verificada."
 
       - name: Preparar Android SDK
         shell: bash
         run: |
           set -e
-          echo "ANDROID_HOME=$ANDROID_HOME"
 
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -print -quit)
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: no se encontró sdkmanager."
+            echo "ERROR: No se encontró sdkmanager."
             exit 1
           fi
 
@@ -63,14 +94,18 @@ jobs:
             "platform-tools"
 
       - name: Descargar SheetJS para Excel
+        working-directory: ${{ steps.extract.outputs.project_dir }}
         run: |
+          mkdir -p app/src/main/assets
+
           curl --fail --location --retry 3 \
             https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js \
             --output app/src/main/assets/xlsx.full.min.js
 
           test -s app/src/main/assets/xlsx.full.min.js
 
-      - name: Descargar Chart.js para gráficos
+      - name: Descargar Chart.js
+        working-directory: ${{ steps.extract.outputs.project_dir }}
         run: |
           curl --fail --location --retry 3 \
             https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js \
@@ -84,9 +119,12 @@ jobs:
           gradle-version: '8.9'
 
       - name: Compilar APK
-        run: gradle --no-daemon clean assembleDebug
+        working-directory: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          gradle --no-daemon clean assembleDebug
 
       - name: Verificar APK
+        working-directory: ${{ steps.extract.outputs.project_dir }}
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
           ls -lh app/build/outputs/apk/debug/app-debug.apk
@@ -95,6 +133,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Matibatidos-POS-APK-RC6
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.extract.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
